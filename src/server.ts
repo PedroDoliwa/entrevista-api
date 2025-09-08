@@ -6,15 +6,9 @@ import { registerRoutes } from "./setupRoutes";
 async function buildServer(): Promise<FastifyInstance> {
     const app = Fastify({ logger: true });
 
-    const frontendUrl = process.env.FRONTEND_URL;
-    if (!frontendUrl) {
-      console.warn("A variável de ambiente FRONTEND_URL não está definida. Usando CORS aberto para desenvolvimento.");
-    }
-    
-    console.log(`Configurando CORS para permitir a origem: ${frontendUrl}`);
 
     await app.register(cors, { 
-      origin: frontendUrl ? [frontendUrl] : '*',
+      origin: true 
     });
 
     registerRoutes(app);
