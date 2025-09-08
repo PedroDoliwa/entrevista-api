@@ -8,11 +8,13 @@ async function buildServer(): Promise<FastifyInstance> {
 
     const frontendUrl = process.env.FRONTEND_URL;
     if (!frontendUrl) {
-      console.warn("A variável de ambiente FRONTEND_URL não está definida. Usando CORS aberto.");
+      console.warn("A variável de ambiente FRONTEND_URL não está definida. Usando CORS aberto para desenvolvimento.");
     }
     
+    console.log(`Configurando CORS para permitir a origem: ${frontendUrl}`);
+
     await app.register(cors, { 
-      origin: frontendUrl || "*" 
+      origin: frontendUrl ? [frontendUrl] : '*',
     });
 
     registerRoutes(app);
@@ -30,3 +32,4 @@ main().catch((err) => {
     console.error(err);
     process.exit(1);
 });
+
