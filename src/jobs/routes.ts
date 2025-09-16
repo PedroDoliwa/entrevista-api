@@ -91,4 +91,38 @@ export async function jobsRoutes(app: FastifyInstance): Promise<void> {
             return job;
         },
     });
+
+     app.patch<{ Params: { id: string }; Body: unknown }>("/:id/feedback", {
+        handler: async (request, reply) => {
+            const paramsSchema = z.object({ id: z.string().uuid() });
+            const bodySchema = z.object({
+                summary: z.string(),
+                strengths: z.string(),
+                weaknesses: z.string(),
+                score: z.number().int().min(0).max(10),
+            });
+
+            try {
+                const { id } = paramsSchema.parse(request.params);
+                const { summary, strengths, weaknesses, score } = bodySchema.parse(request.body);
+
+                const updatedJob = await prisma.job.update({
+                    where: { id },
+                    data: {
+                        feedbackSummary: summary,
+                        feedbackStrengths: strengths,
+                        feedbackWeaknesses: weaknesses,
+                        feedbackScore: score,
+                    },
+                });
+
+                return updatedJob;
+            } catch (error) {
+                console.error("Erro ao guardar feedback:", error);
+                return reply.code(400).send({ message: "Dados de feedback inválidos." });
+            }
+        },
+    });
 }
+
+
