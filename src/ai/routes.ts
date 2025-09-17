@@ -1,60 +1,71 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { prisma } from "../lib/prisma";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
 
-async function callGeminiAPI(prompt: string) {
+// Função auxiliar para chamar a API do Gemini com retries
+async function callGeminiAPI(prompt: string, retries = 3, delay = 1000) {
   if (!GEMINI_API_KEY) {
     throw new Error("A chave da API do Gemini (GEMINI_API_KEY) não está definida.");
   }
+  const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
 
-  try {
-    const response = await fetch(GEMINI_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-      }),
-    });
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(GEMINI_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+        }),
+      });
 
-    if (!response.ok) {
-      const errorBody = await response.json();
-      console.error("Erro na resposta da API do Gemini:", errorBody);
-      throw new Error(`Falha na API do Gemini com status: ${response.status}`);
-    }
+      if (!response.ok) {
+        const errorBody = await response.json();
+        console.error("Erro na resposta da API do Gemini:", errorBody);
+        if (response.status >= 500 && i < retries - 1) {
+          console.log(`Tentativa ${i + 1} falhou. A tentar novamente em ${delay / 1000}s...`);
+          await new Promise(res => setTimeout(res, delay));
+          delay *= 2; // Exponential backoff
+          continue;
+        }
+        throw new Error(`Falha na API do Gemini com status: ${response.status}`);
+      }
 
-    const data = await response.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
+      const data = await response.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) {
         throw new Error("Resposta da IA inválida ou vazia.");
+      }
+      return text;
+    } catch (error) {
+      console.error(`Erro na tentativa ${i + 1} de chamar a API do Gemini:`, error);
+      if (i < retries - 1) {
+        await new Promise(res => setTimeout(res, delay));
+        delay *= 2;
+      } else {
+        throw new Error("Falha ao gerar conteúdo com a IA após múltiplas tentativas.");
+      }
     }
-    return text;
-  } catch (error) {
-    console.error("Erro ao chamar a API do Gemini:", error);
-    throw new Error("Falha ao gerar conteúdo com a IA.");
   }
+  throw new Error("Falha ao comunicar com a IA."); // Fallback
 }
 
 export async function aiRoutes(app: FastifyInstance): Promise<void> {
     app.post<{ Body: unknown }>("/conversation", {
         handler: async (request, reply) => {
             const bodySchema = z.object({
-                jobDetails: z.object({
-                    title: z.string(),
-                    description: z.string(),
-                }),
+                jobDetails: z.object({ title: z.string(), description: z.string() }),
                 history: z.array(z.object({
                     role: z.enum(['user', 'model']),
-                    parts: z.array(z.object({ text: z.string() })).optional()
+                    parts: z.array(z.object({ text: z.string() }))
                 }))
             });
 
             try {
                 const { jobDetails, history } = bodySchema.parse(request.body);
-                const historyText = history
-                    .map(h => `${h.role === 'model' ? 'Recrutador' : 'Candidato'}: ${h.parts?.[0]?.text || ''}`)
-                    .join('\n');
+                const historyText = history.map(h => `${h.role === 'model' ? 'Recrutador' : 'Candidato'}: ${h.parts[0]?.text ?? ''}`).join('\n');
 
                 const prompt = `
                     Você é um recrutador de IA a conduzir uma entrevista para a vaga de "${jobDetails.title}".
@@ -73,21 +84,21 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
         }
     });
 
+    // Rota OTIMIZADA para GERAR E GUARDAR o feedback final
     app.post<{ Body: unknown }>("/feedback", {
         handler: async (request, reply) => {
             const bodySchema = z.object({
+                jobId: z.string().uuid(), // <<< RECEBE O JOB ID
                 jobDetails: z.object({ title: z.string(), description: z.string() }),
                 history: z.array(z.object({
                     role: z.enum(['user', 'model']),
-                    parts: z.array(z.object({ text: z.string() })).optional()
+                    parts: z.array(z.object({ text: z.string() }))
                 }))
             });
 
             try {
-                const { jobDetails, history } = bodySchema.parse(request.body);
-                const conversationText = history
-                    .map(h => `${h.role === 'model' ? 'Recrutador' : 'Candidato'}: ${h.parts?.[0]?.text || ''}`)
-                    .join('\n');
+                const { jobId, jobDetails, history } = bodySchema.parse(request.body);
+                const conversationText = history.map(h => `${h.role === 'model' ? 'Recrutador' : 'Candidato'}: ${h.parts[0]?.text ?? ''}`).join('\n');
 
                 const prompt = `
                     Analise a seguinte transcrição de entrevista para a vaga de "${jobDetails.title}".
@@ -104,9 +115,23 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 
                 const feedbackJsonString = await callGeminiAPI(prompt);
                 const feedback = JSON.parse(feedbackJsonString.replace(/```json|```/g, '').trim());
-                return feedback;
+
+                // <<< GUARDA O FEEDBACK DIRETAMENTE NO BANCO DE DADOS >>>
+                const updatedJob = await prisma.job.update({
+                    where: { id: jobId },
+                    data: {
+                        feedbackSummary: feedback.summary,
+                        feedbackStrengths: feedback.strengths,
+                        feedbackWeaknesses: feedback.weaknesses,
+                        feedbackScore: feedback.score,
+                    },
+                });
+
+                return updatedJob; // Retorna o Job já atualizado
+
             } catch (error) {
-                return reply.code(500).send({ message: "Erro ao gerar feedback com a IA." });
+                console.error("Erro ao gerar ou guardar feedback:", error);
+                return reply.code(500).send({ message: "Erro ao processar feedback com a IA." });
             }
         }
     });
