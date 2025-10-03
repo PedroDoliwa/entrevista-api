@@ -9,7 +9,6 @@ if (!GEMINI_API_KEY) {
   console.error("⚠️ GEMINI_API_KEY não está definida!");
 }
 
-// Inicializar o SDK do Google
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY || "");
 
 async function callGeminiAPI(prompt: string, retries = 3) {
@@ -17,12 +16,12 @@ async function callGeminiAPI(prompt: string, retries = 3) {
     throw new Error("A chave da API do Gemini (GEMINI_API_KEY) não está definida.");
   }
 
-  // Usar o modelo correto via SDK
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  // ✅ USAR GEMINI-PRO (funciona com v1beta)
+  const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
   for (let i = 0; i < retries; i++) {
     try {
-      console.log(`🤖 Tentativa ${i + 1} de ${retries} - Modelo: gemini-1.5-flash`);
+      console.log(`🤖 Tentativa ${i + 1} de ${retries} - Modelo: gemini-pro`);
       
       const result = await model.generateContent(prompt);
       const response = await result.response;
@@ -34,14 +33,14 @@ async function callGeminiAPI(prompt: string, retries = 3) {
 
       console.log("✅ Resposta da IA recebida com sucesso");
       return text;
-    } catch (error: any) {
-      console.error(`❌ Erro na tentativa ${i + 1}:`, error.message);
+    } catch (error: unknown) {
+      const err = error as Error;
+      console.error(`❌ Erro na tentativa ${i + 1}:`, err.message);
       
       if (i === retries - 1) {
-        throw new Error(`Falha ao gerar conteúdo com a IA após ${retries} tentativas: ${error.message}`);
+        throw new Error(`Falha ao gerar conteúdo com a IA após ${retries} tentativas: ${err.message}`);
       }
 
-      // Aguardar antes de tentar novamente (backoff exponencial)
       await new Promise(res => setTimeout(res, 1000 * (i + 1)));
     }
   }
@@ -79,11 +78,12 @@ Se o histórico estiver vazio, faça a primeira pergunta.
 
         const nextQuestion = await callGeminiAPI(prompt);
         return { nextQuestion };
-      } catch (error: any) {
-        console.error("Erro completo na rota /conversation:", error);
+      } catch (error: unknown) {
+        const err = error as Error;
+        console.error("Erro completo na rota /conversation:", err);
         return reply.code(500).send({ 
           message: "Erro de comunicação com o serviço de IA.",
-          details: error.message 
+          details: err.message 
         });
       }
     },
@@ -152,11 +152,12 @@ Seja objetivo e construtivo.
         });
 
         return newJob;
-      } catch (error: any) {
-        console.error("Erro ao gerar ou guardar feedback:", error);
+      } catch (error: unknown) {
+        const err = error as Error;
+        console.error("Erro ao gerar ou guardar feedback:", err);
         return reply.code(500).send({ 
           message: "Erro ao processar feedback com a IA.",
-          details: error.message 
+          details: err.message 
         });
       }
     },
