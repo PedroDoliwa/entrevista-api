@@ -8,7 +8,7 @@ async function callGeminiAPI(prompt: string, retries = 3, delay = 1000) {
   if (!GEMINI_API_KEY) {
     throw new Error("A chave da API do Gemini (GEMINI_API_KEY) não está definida.");
   }
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`;
 
   for (let i = 0; i < retries; i++) {
     try {
@@ -26,7 +26,7 @@ const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/
         if (response.status >= 500 && i < retries - 1) {
           console.log(`Tentativa ${i + 1} falhou. A tentar novamente em ${delay / 1000}s...`);
           await new Promise(res => setTimeout(res, delay));
-          delay *= 2; // Exponential backoff
+          delay *= 2;
           continue;
         }
         throw new Error(`Falha na API do Gemini com status: ${response.status}`);
@@ -48,7 +48,7 @@ const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/
       }
     }
   }
-  throw new Error("Falha ao comunicar com a IA."); 
+  throw new Error("Falha ao comunicar com a IA.");
 }
 
 export async function aiRoutes(app: FastifyInstance): Promise<void> {
@@ -83,7 +83,6 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
         }
     });
 
-    // Rota para GERAR E GUARDAR o feedback final
     app.post<{ Body: unknown }>("/feedback", {
         handler: async (request, reply) => {
             const bodySchema = z.object({
@@ -120,16 +119,10 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
                 const feedbackJsonString = await callGeminiAPI(prompt);
                 const feedback = JSON.parse(feedbackJsonString.replace(/```json|```/g, '').trim());
 
-                // <<< INÍCIO DA CORREÇÃO >>>
-                // Garante que 'strengths' e 'weaknesses' sejam strings, mesmo que a IA retorne um array.
                 const strengthsAsString = Array.isArray(feedback.strengths) ? feedback.strengths.join('; ') : feedback.strengths;
                 const weaknessesAsString = Array.isArray(feedback.weaknesses) ? feedback.weaknesses.join('; ') : feedback.weaknesses;
-                
-                // Garante que a nota esteja no intervalo correto (0 a 10) para evitar erros.
                 const scoreAsNumber = Math.max(0, Math.min(10, parseInt(feedback.score, 10) || 0));
-                // <<< FIM DA CORREÇÃO >>>
 
-                // CRIA o Job no banco com todos os dados já formatados
                 const newJob = await prisma.job.create({
                     data: {
                         // Dados da vaga
