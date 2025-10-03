@@ -8,7 +8,7 @@ async function callGeminiAPI(prompt: string, retries = 3, delay = 1000) {
   if (!GEMINI_API_KEY) {
     throw new Error("A chave da API do Gemini (GEMINI_API_KEY) não está definida.");
   }
-  const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
   for (let i = 0; i < retries; i++) {
     try {
