@@ -1,44 +1,56 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-if (!GEMINI_API_KEY) {
-  console.error("⚠️ GEMINI_API_KEY não está definida!");
-}
-
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY || "");
-
 async function callGeminiAPI(prompt: string, retries = 3) {
   if (!GEMINI_API_KEY) {
-    throw new Error("A chave da API do Gemini (GEMINI_API_KEY) não está definida.");
+    throw new Error("GEMINI_API_KEY não está definida.");
   }
 
-  // ✅ USAR GEMINI-PRO (funciona com v1beta)
-  const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+  // Usar gemini-2.0-flash (disponível na sua conta)
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 
   for (let i = 0; i < retries; i++) {
     try {
-      console.log(`🤖 Tentativa ${i + 1} de ${retries} - Modelo: gemini-pro`);
+      console.log(`🔄 Tentativa ${i + 1} de ${retries}`);
       
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+        }),
+      });
 
-      if (!text) {
-        throw new Error("Resposta da IA inválida ou vazia.");
+      if (!response.ok) {
+        const errorBody = await response.json();
+        console.error("❌ Erro da API:", JSON.stringify(errorBody, null, 2));
+        
+        if (response.status >= 500 && i < retries - 1) {
+          await new Promise(res => setTimeout(res, 1000 * (i + 1)));
+          continue;
+        }
+        
+        throw new Error(`API retornou ${response.status}: ${JSON.stringify(errorBody)}`);
       }
 
-      console.log("✅ Resposta da IA recebida com sucesso");
+      const data = await response.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      if (!text) {
+        throw new Error("Resposta vazia.");
+      }
+
+      console.log("✅ Sucesso");
       return text;
     } catch (error: unknown) {
       const err = error as Error;
-      console.error(`❌ Erro na tentativa ${i + 1}:`, err.message);
+      console.error(`❌ Tentativa ${i + 1}:`, err.message);
       
       if (i === retries - 1) {
-        throw new Error(`Falha ao gerar conteúdo com a IA após ${retries} tentativas: ${err.message}`);
+        throw new Error(`Falha após ${retries} tentativas: ${err.message}`);
       }
 
       await new Promise(res => setTimeout(res, 1000 * (i + 1)));
@@ -80,7 +92,7 @@ Se o histórico estiver vazio, faça a primeira pergunta.
         return { nextQuestion };
       } catch (error: unknown) {
         const err = error as Error;
-        console.error("Erro completo na rota /conversation:", err);
+        console.error("Erro na rota /conversation:", err);
         return reply.code(500).send({ 
           message: "Erro de comunicação com o serviço de IA.",
           details: err.message 
@@ -154,7 +166,7 @@ Seja objetivo e construtivo.
         return newJob;
       } catch (error: unknown) {
         const err = error as Error;
-        console.error("Erro ao gerar ou guardar feedback:", err);
+        console.error("Erro ao gerar feedback:", err);
         return reply.code(500).send({ 
           message: "Erro ao processar feedback com a IA.",
           details: err.message 
