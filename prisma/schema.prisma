@@ -30,8 +30,12 @@ model User {
   email        String     @unique
   passwordHash String
 
+  // Sistema de créditos
+  credits      Int        @default(0)
+  
   jobs         Job[]
   schedules    Schedule[]
+  creditTransactions CreditTransaction[]
 }
 
 model Job {
@@ -54,6 +58,7 @@ model Job {
   user            User          @relation(fields: [userId], references: [id])
 
   schedules       Schedule[]
+  transactions    CreditTransaction[]
 
   @@index([userId])
 }
@@ -74,4 +79,63 @@ model Schedule {
 
   @@index([userId, scheduledAt])
   @@index([jobId, scheduledAt])
+}
+
+// Sistema de Créditos e Pagamentos
+
+enum TransactionType {
+  PURCHASE    // Compra de créditos
+  CONSUMPTION // Consumo de créditos (entrevista)
+  REFUND      // Reembolso
+  BONUS       // Créditos bônus
+}
+
+enum TransactionStatus {
+  PENDING     // Pendente
+  COMPLETED   // Concluída
+  FAILED      // Falhou
+  CANCELLED   // Cancelada
+}
+
+model CreditPackage {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  name        String   // Ex: "Pacote Básico", "Pacote Premium"
+  description String?  @db.Text
+  credits     Int      // Quantidade de créditos
+  price       Decimal  @db.Decimal(10, 2) // Preço em reais
+  isActive    Boolean  @default(true)
+  
+  transactions CreditTransaction[]
+
+  @@index([isActive])
+}
+
+model CreditTransaction {
+  id          String            @id @default(uuid())
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  type        TransactionType
+  status      TransactionStatus @default(PENDING)
+  amount      Int               // Quantidade de créditos (positivo para compra, negativo para consumo)
+  price       Decimal?          @db.Decimal(10, 2) // Preço pago (apenas para compras)
+  
+  userId      String
+  user        User              @relation(fields: [userId], references: [id])
+  
+  packageId   String?           // ID do pacote comprado (apenas para compras)
+  package     CreditPackage?    @relation(fields: [packageId], references: [id])
+  
+  jobId       String?           // ID da entrevista (apenas para consumo)
+  job         Job?              @relation(fields: [jobId], references: [id])
+  
+  paymentId   String?           // ID do pagamento externo (Stripe, PayPal, etc.)
+  metadata    Json?             // Dados adicionais do pagamento
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([type])
 }
