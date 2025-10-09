@@ -259,8 +259,8 @@ Seja objetivo e construtivo.
 
       
       const voiceIds = {
-        FEMININE: "XrExE9yKIg1WjnnlVkGX", 
-        MASCULINE: "IKne3meq5aSn9XLyUdCD", 
+        FEMININE: "xPnmQf6Ow3GGYWWURFPi", 
+        MASCULINE: "YNOujSUmHtgN6anjqXPf", 
       };
       
       const selectedVoiceId = voiceIds[voiceGender];
