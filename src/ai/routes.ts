@@ -243,4 +243,58 @@ Seja objetivo e construtivo.
       }
     },
   });
+
+  app.post<{ Body: unknown }>('/text-to-speech', async (request, reply) => {
+    if (!process.env.ELEVENLABS_API_KEY) {
+      return reply.code(500).send({ message: "Chave da API do ElevenLabs não configurada." });
+    }
+
+    const bodySchema = z.object({
+      text: z.string().min(1),
+      voiceGender: z.enum(['FEMININE', 'MASCULINE']).default('FEMININE'),
+    });
+
+    try {
+      const { text, voiceGender } = bodySchema.parse(request.body);
+
+      
+      const voiceIds = {
+        FEMININE: "pNInz6obpgDQGcFmaJgB", 
+        MASCULINE: "yoZ06aMkjgdqG9FpAYbA", 
+      };
+      
+      const selectedVoiceId = voiceIds[voiceGender];
+      
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${selectedVoiceId}`, {
+        method: 'POST',
+        headers: {
+          'Accept': 'audio/mpeg',
+          'Content-Type': 'application/json',
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+        },
+        body: JSON.stringify({
+          text: text,
+          model_id: 'eleven_multilingual_v2',
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json();
+        console.error("Erro da API ElevenLabs:", errorBody);
+        return reply.code(response.status).send({ message: "Erro ao gerar áudio." });
+      }
+
+      // Envia o áudio diretamente para o frontend
+      reply.header('Content-Type', 'audio/mpeg');
+      return reply.send(response.body);
+
+    } catch (error: any) {
+      console.error("Erro na rota /text-to-speech:", error);
+      return reply.code(500).send({ message: "Erro interno ao processar a requisição de áudio." });
+    }
+  });
 }
