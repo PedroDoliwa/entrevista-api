@@ -1,0 +1,255 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.aiRoutes = aiRoutes;
+const zod_1 = require("zod");
+const prisma_1 = require("../lib/prisma");
+// Função para calcular o custo de créditos baseado no tipo de entrevista
+function getCreditsCost(interviewType, durationMinutes) {
+    const baseCosts = {
+        TEXT: 1,
+        VOICE: 2,
+        AVATAR: 3
+    };
+    const baseCost = baseCosts[interviewType] || 1;
+    // Adiciona custo extra para entrevistas mais longas
+    if (durationMinutes > 30) {
+        return baseCost * 2;
+    }
+    return baseCost;
+}
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+async function callGeminiAPI(prompt, retries = 3) {
+    if (!GEMINI_API_KEY) {
+        throw new Error("GEMINI_API_KEY não está definida.");
+    }
+    // Usar gemini-2.0-flash (disponível na sua conta)
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+    for (let i = 0; i < retries; i++) {
+        try {
+            console.log(`🔄 Tentativa ${i + 1} de ${retries}`);
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }] }],
+                }),
+            });
+            if (!response.ok) {
+                const errorBody = await response.json();
+                console.error("❌ Erro da API:", JSON.stringify(errorBody, null, 2));
+                if (response.status >= 500 && i < retries - 1) {
+                    await new Promise(res => setTimeout(res, 1000 * (i + 1)));
+                    continue;
+                }
+                throw new Error(`API retornou ${response.status}: ${JSON.stringify(errorBody)}`);
+            }
+            const data = await response.json();
+            const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (!text) {
+                throw new Error("Resposta vazia.");
+            }
+            console.log("✅ Sucesso");
+            return text;
+        }
+        catch (error) {
+            const err = error;
+            console.error(`❌ Tentativa ${i + 1}:`, err.message);
+            if (i === retries - 1) {
+                throw new Error(`Falha após ${retries} tentativas: ${err.message}`);
+            }
+            await new Promise(res => setTimeout(res, 1000 * (i + 1)));
+        }
+    }
+    throw new Error("Falha ao comunicar com a IA.");
+}
+async function aiRoutes(app) {
+    app.post("/conversation", {
+        handler: async (request, reply) => {
+            const bodySchema = zod_1.z.object({
+                jobDetails: zod_1.z.object({ title: zod_1.z.string(), description: zod_1.z.string() }),
+                history: zod_1.z.array(zod_1.z.object({
+                    role: zod_1.z.enum(["user", "model"]),
+                    parts: zod_1.z.array(zod_1.z.object({ text: zod_1.z.string() })),
+                })),
+            });
+            try {
+                const { jobDetails, history } = bodySchema.parse(request.body);
+                const historyText = history
+                    .map((h) => `${h.role === "model" ? "Recrutador" : "Candidato"}: ${h.parts[0]?.text ?? ""}`)
+                    .join("\n");
+                const prompt = `
+Você é um recrutador de IA a conduzir uma entrevista para a vaga de "${jobDetails.title}".
+A descrição da vaga é: "${jobDetails.description}".
+O histórico da conversa até agora é:
+${historyText}
+Com base na última resposta do candidato, faça a próxima pergunta relevante para a vaga. Seja conciso e direto.
+Se o histórico estiver vazio, faça a primeira pergunta.
+        `;
+                const nextQuestion = await callGeminiAPI(prompt);
+                return { nextQuestion };
+            }
+            catch (error) {
+                const err = error;
+                console.error("Erro na rota /conversation:", err);
+                return reply.code(500).send({
+                    message: "Erro de comunicação com o serviço de IA.",
+                    details: err.message
+                });
+            }
+        },
+    });
+    app.post("/feedback", {
+        handler: async (request, reply) => {
+            const bodySchema = zod_1.z.object({
+                jobDetails: zod_1.z.object({
+                    title: zod_1.z.string(),
+                    description: zod_1.z.string(),
+                    user_id: zod_1.z.string().uuid(),
+                    duracao_entrevista: zod_1.z.number().int().min(1),
+                    tipo_de_entrevista: zod_1.z.enum(["TEXT", "VOICE", "AVATAR"]),
+                }),
+                history: zod_1.z.array(zod_1.z.object({
+                    role: zod_1.z.enum(["user", "model"]),
+                    parts: zod_1.z.array(zod_1.z.object({ text: zod_1.z.string() })),
+                })),
+            });
+            try {
+                const { jobDetails, history } = bodySchema.parse(request.body);
+                // Calcular custo de créditos
+                const creditsCost = getCreditsCost(jobDetails.tipo_de_entrevista, jobDetails.duracao_entrevista);
+                // Verificar se o usuário tem créditos suficientes
+                const user = await prisma_1.prisma.user.findUnique({
+                    where: { id: jobDetails.user_id },
+                    select: { credits: true },
+                });
+                if (!user) {
+                    return reply.code(404).send({ message: "Usuário não encontrado." });
+                }
+                if (user.credits < creditsCost) {
+                    return reply.code(400).send({
+                        message: "Créditos insuficientes para gerar feedback.",
+                        required: creditsCost,
+                        available: user.credits,
+                    });
+                }
+                const conversationText = history
+                    .map((h) => `${h.role === "model" ? "Recrutador" : "Candidato"}: ${h.parts[0]?.text ?? ""}`)
+                    .join("\n");
+                const prompt = `
+Analise a seguinte transcrição de entrevista para a vaga de "${jobDetails.title}".
+Transcrição:
+${conversationText}
+
+Com base na conversa, forneça uma avaliação do candidato em formato JSON. O JSON deve ter as seguintes chaves:
+- "summary": (string) Um resumo geral do desempenho do candidato em uma frase.
+- "strengths": (string) Uma lista de 2 a 3 pontos fortes, separados por ponto e vírgula.
+- "weaknesses": (string) Uma lista de 2 a 3 pontos a melhorar, separados por ponto e vírgula.
+- "score": (number) Uma nota de 0 a 10 para o desempenho geral.
+Seja objetivo e construtivo.
+        `;
+                const feedbackJsonString = await callGeminiAPI(prompt);
+                const feedback = JSON.parse(feedbackJsonString.replace(/```json|```/g, "").trim());
+                const strengthsAsString = Array.isArray(feedback.strengths)
+                    ? feedback.strengths.join("; ")
+                    : feedback.strengths;
+                const weaknessesAsString = Array.isArray(feedback.weaknesses)
+                    ? feedback.weaknesses.join("; ")
+                    : feedback.weaknesses;
+                const scoreAsNumber = Math.max(0, Math.min(10, parseInt(feedback.score, 10) || 0));
+                // Executar transação para criar job e consumir créditos
+                const result = await prisma_1.prisma.$transaction(async (tx) => {
+                    // Criar o job com feedback
+                    const newJob = await tx.job.create({
+                        data: {
+                            title: jobDetails.title,
+                            description: jobDetails.description,
+                            durationMinutes: jobDetails.duracao_entrevista,
+                            interviewType: jobDetails.tipo_de_entrevista,
+                            userId: jobDetails.user_id,
+                            feedbackSummary: feedback.summary,
+                            feedbackStrengths: strengthsAsString,
+                            feedbackWeaknesses: weaknessesAsString,
+                            feedbackScore: scoreAsNumber,
+                        },
+                    });
+                    // Atualizar saldo de créditos do usuário
+                    const updatedUser = await tx.user.update({
+                        where: { id: jobDetails.user_id },
+                        data: { credits: { decrement: creditsCost } },
+                        select: { credits: true },
+                    });
+                    // Criar transação de consumo
+                    const transaction = await tx.creditTransaction.create({
+                        data: {
+                            type: "CONSUMPTION",
+                            status: "COMPLETED",
+                            amount: -creditsCost, // Negativo para consumo
+                            userId: jobDetails.user_id,
+                            jobId: newJob.id,
+                        },
+                    });
+                    return { newJob, updatedUser, transaction };
+                });
+                return {
+                    ...result.newJob,
+                    creditsUsed: creditsCost,
+                    remainingCredits: result.updatedUser.credits,
+                };
+            }
+            catch (error) {
+                const err = error;
+                console.error("Erro ao gerar feedback:", err);
+                return reply.code(500).send({
+                    message: "Erro ao processar feedback com a IA.",
+                    details: err.message
+                });
+            }
+        },
+    });
+    app.post('/text-to-speech', async (request, reply) => {
+        if (!process.env.ELEVENLABS_API_KEY) {
+            return reply.code(500).send({ message: "Chave da API do ElevenLabs não configurada." });
+        }
+        const bodySchema = zod_1.z.object({
+            text: zod_1.z.string().min(1),
+            voiceGender: zod_1.z.enum(['FEMININE', 'MASCULINE']).default('FEMININE'),
+        });
+        try {
+            const { text, voiceGender } = bodySchema.parse(request.body);
+            const voiceIds = {
+                FEMININE: "xPnmQf6Ow3GGYWWURFPi",
+                MASCULINE: "YNOujSUmHtgN6anjqXPf",
+            };
+            const selectedVoiceId = voiceIds[voiceGender];
+            const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${selectedVoiceId}`, {
+                method: 'POST',
+                headers: {
+                    'Accept': 'audio/mpeg',
+                    'Content-Type': 'application/json',
+                    'xi-api-key': process.env.ELEVENLABS_API_KEY,
+                },
+                body: JSON.stringify({
+                    text: text,
+                    model_id: 'eleven_multilingual_v2',
+                    voice_settings: {
+                        stability: 0.5,
+                        similarity_boost: 0.75,
+                    },
+                }),
+            });
+            if (!response.ok) {
+                const errorBody = await response.json();
+                console.error("Erro da API ElevenLabs:", errorBody);
+                return reply.code(response.status).send({ message: "Erro ao gerar áudio." });
+            }
+            // Envia o áudio diretamente para o frontend
+            reply.header('Content-Type', 'audio/mpeg');
+            return reply.send(response.body);
+        }
+        catch (error) {
+            console.error("Erro na rota /text-to-speech:", error);
+            return reply.code(500).send({ message: "Erro interno ao processar a requisição de áudio." });
+        }
+    });
+}
+//# sourceMappingURL=routes.js.map

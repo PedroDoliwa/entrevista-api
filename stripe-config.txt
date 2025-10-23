@@ -1,0 +1,19 @@
+# Configuração do Stripe - PRODUÇÃO
+# Copie este conteúdo para seu arquivo .env
+
+# Database
+DATABASE_URL="postgresql://username:password@localhost:5432/entrevista_db"
+DATABASE_URL_MIGRATE="postgresql://username:password@localhost:5432/entrevista_db"
+SHADOW_DATABASE_URL="postgresql://username:password@localhost:5432/entrevista_db_shadow"
+
+# JWT
+JWT_SECRET="your-super-secret-jwt-key-here"
+
+# Google AI
+GOOGLE_AI_API_KEY="your-google-ai-api-key-here"
+
+# Stripe Configuration - PRODUÇÃO
+STRIPE_SECRET_KEY="sk_live_..." # ⚠️ SUBSTITUA pela sua chave secreta de produção
+STRIPE_PUBLISHABLE_KEY="pk_live_51SLCyZHVh8rgC6cSRmdxMKlLefdb2P2LeJcdnv9ZNScgKxY81BhPo3GxEoGIolML81xVvOWYeyr8Kv6z3piuu2EA00AWDN7yZC"
+STRIPE_WEBHOOK_SECRET="whsec_..." # ⚠️ SUBSTITUA pelo secret do webhook de produção
+STRIPE_CURRENCY="BRL"

@@ -10,7 +10,9 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "db:create": "node scripts/create-local-db.js",
-    "db:setup": "npm run db:create && npm run prisma:migrate && npm run prisma:generate"
+    "db:setup": "npm run db:create && npm run prisma:migrate && npm run prisma:generate",
+    "test:stripe": "node scripts/test-stripe.js",
+    "test:stripe:production": "node scripts/test-stripe-production.js"
   },
   "keywords": [],
   "author": "",
@@ -20,11 +22,13 @@
     "@fastify/cors": "^11.1.0",
     "@google/generative-ai": "^0.24.1",
     "@prisma/client": "^6.15.0",
+    "@types/stripe": "^8.0.416",
     "bcrypt": "^6.0.0",
     "dotenv": "^17.2.2",
     "fastify": "^5.5.0",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.16.3",
+    "stripe": "^19.1.0",
     "zod": "^4.1.5"
   },
   "devDependencies": {
