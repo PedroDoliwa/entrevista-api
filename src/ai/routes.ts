@@ -122,6 +122,7 @@ Se o histórico estiver vazio, faça a primeira pergunta.
   app.post<{ Body: unknown }>("/feedback", {
     handler: async (request, reply) => {
       const bodySchema = z.object({
+        jobId: z.string().uuid(), // ✅ Adicionar jobId para identificar qual Job atualizar
         jobDetails: z.object({
           title: z.string(),
           description: z.string(),
@@ -138,28 +139,24 @@ Se o histórico estiver vazio, faça a primeira pergunta.
       });
 
       try {
-        const { jobDetails, history } = bodySchema.parse(request.body);
+        const { jobId, jobDetails, history } = bodySchema.parse(request.body);
         
-        // Calcular custo de créditos
-        const creditsCost = getCreditsCost(jobDetails.tipo_de_entrevista, jobDetails.duracao_entrevista);
-        
-        // Verificar se o usuário tem créditos suficientes
-        const user = await prisma.user.findUnique({
-          where: { id: jobDetails.user_id },
-          select: { credits: true },
+        // ✅ Verificar se o Job existe
+        const existingJob = await prisma.job.findUnique({
+          where: { id: jobId },
+          select: { id: true, userId: true },
         });
         
-        if (!user) {
-          return reply.code(404).send({ message: "Usuário não encontrado." });
+        if (!existingJob) {
+          return reply.code(404).send({ message: "Entrevista não encontrada." });
         }
         
-        if (user.credits < creditsCost) {
-          return reply.code(400).send({
-            message: "Créditos insuficientes para gerar feedback.",
-            required: creditsCost,
-            available: user.credits,
-          });
+        // ✅ Verificar se o Job pertence ao usuário
+        if (existingJob.userId !== jobDetails.user_id) {
+          return reply.code(403).send({ message: "Não autorizado a atualizar esta entrevista." });
         }
+        
+        // ❌ REMOVIDO: Verificação de créditos (já foram consumidos na criação do Job)
         
         const conversationText = history
           .map((h) => `${h.role === "model" ? "Recrutador" : "Candidato"}: ${h.parts[0]?.text ?? ""}`)
@@ -189,49 +186,20 @@ Seja objetivo e construtivo.
           : feedback.weaknesses;
         const scoreAsNumber = Math.max(0, Math.min(10, parseInt(feedback.score, 10) || 0));
 
-        // Executar transação para criar job e consumir créditos
-        const result = await prisma.$transaction(async (tx) => {
-          // Criar o job com feedback
-          const newJob = await tx.job.create({
-            data: {
-              title: jobDetails.title,
-              description: jobDetails.description,
-              durationMinutes: jobDetails.duracao_entrevista,
-              interviewType: jobDetails.tipo_de_entrevista,
-              userId: jobDetails.user_id,
-              feedbackSummary: feedback.summary,
-              feedbackStrengths: strengthsAsString,
-              feedbackWeaknesses: weaknessesAsString,
-              feedbackScore: scoreAsNumber,
-            },
-          });
-          
-          // Atualizar saldo de créditos do usuário
-          const updatedUser = await tx.user.update({
-            where: { id: jobDetails.user_id },
-            data: { credits: { decrement: creditsCost } },
-            select: { credits: true },
-          });
-          
-          // Criar transação de consumo
-          const transaction = await tx.creditTransaction.create({
-            data: {
-              type: "CONSUMPTION",
-              status: "COMPLETED",
-              amount: -creditsCost, // Negativo para consumo
-              userId: jobDetails.user_id,
-              jobId: newJob.id,
-            },
-          });
-          
-          return { newJob, updatedUser, transaction };
+        // ✅ USAR UPDATE ao invés de CREATE
+        const updatedJob = await prisma.job.update({
+          where: { id: jobId },
+          data: {
+            feedbackSummary: feedback.summary,
+            feedbackStrengths: strengthsAsString,
+            feedbackWeaknesses: weaknessesAsString,
+            feedbackScore: scoreAsNumber,
+            updatedAt: new Date(),
+          },
         });
 
-        return {
-          ...result.newJob,
-          creditsUsed: creditsCost,
-          remainingCredits: result.updatedUser.credits,
-        };
+        // ✅ Retornar o Job atualizado (com o mesmo ID)
+        return updatedJob;
         
       } catch (error: unknown) {
         const err = error as Error;
